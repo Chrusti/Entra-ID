@@ -12,6 +12,7 @@
             -ChangePasswordAtLogon = $false
             –PasswordNeverExpires = $true
             -SmartcardLogonRequired = $true
+            -sAMAccountName = everything infront of @ in mail address 
     NOTE: This does not support group nesting in the Azure AD Group
 .DESCRIPTION
     Version: 1.0.3
@@ -43,13 +44,14 @@ $DeleteOrphanedShadowAccounts = $false #If set to true, guest users who are remo
 
 # Replace all TODO values with the appropriate value.
 # Requires additional configuration - refer to documentation
-$B2BGroupID = "2a5f14d1-82b7-41ce-b269-4704efe73bb1" #Azure AD group's ObjectID
-$ADDomain = "niboatcrayon.com"
-$ShadowAccountOU = "OU=B2B_ShadowAccounts,OU=NIBO,DC=niboatcrayon,DC=com" #DistinguishedName of an OU for placing shadow accounts
-$DisabledShadowAccountOU = "OU=B2B_DisabledShadowAccounts,OU=NIBO,DC=niboatcrayon,DC=com" #DistinguishedName of an OU for moving disabled shadow accounts
-$AppID = "4cc25c22-1b4b-49d3-9ca3-15c37f19e629" # Insert your application's Client ID
-$TenantID = "afd8cf85-ce66-4b98-84b8-f19e82748045" # Tenant ID of Azure AD
-$Cert = "5C918660C8FD5E290AF837CFBABFD64074E6C070" #Certificate thumbprint used by application for authentication
+$B2BGroupID = "TODO" #Azure AD group's ObjectID
+$ADDomain = "TODO"
+$ShadowAccountOU = "TODO" #DistinguishedName of an OU for placing shadow accounts
+$DisabledShadowAccountOU = "TODO" #DistinguishedName of an OU for moving disabled shadow accounts
+$AppID = "TODO" # Insert your application's Client ID
+$TenantID = "TODO" # Tenant ID of Azure AD
+$Cert = "TODO" #Certificate thumbprint used by application for authentication
+$LogPath = "TODO"
 
 # No need to modify more variables
 # Variable initialization
@@ -60,8 +62,29 @@ $B2bDisabledShadowAccountsHash = @{}
 $ReenabledShadowAccounts = @{}
 #endregion
 
+function Write-Log {
+    param (
+        [string]$LogPath,
+        [string]$Message,
+        [string]$Type
+    )
+    $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm:ss"
+    $logEntry = "$timestamp - $Type - $Message"
+    Add-Content -Path $LogPath -Value $logEntry
+}
+
+#region log - Start transcription and save to logfile
+
+$LogFileSize = (Get-ChildItem $LogPath).Length
+If($LogFileSize -ge 10000000){
+    Start-Transcript -Path $LogPath -Append -IncludeInvocationHeader
+    Write-host -f Cyan "Cleared Logfile '$LogPath' because >10MB"
+}else {
+    Start-Transcript -Path $LogPath -Append
+}
+
 #region 3 - Populate Initial Hash Tables
-Connect-MgGraph -ClientID $appID -TenantId $tenantID -CertificateThumbprint $Cert
+Connect-MgGraph -ClientID $appID -TenantId $tenantID -CertificateThumbprint $Cert -NoWelcome
 #If you want to run under a user context, run Connect-MgGraph -Scopes "user.read.all","group.read.all" 
 
 # Populate hash table with all Guest users from tenant using object ID as key
@@ -134,8 +157,7 @@ If ($CreateMissingShadowAccounts -eq $true)
 {
     ForEach($key in $($UsersInB2BGroupHash.keys))
         {
-        $samaccountname = $TenantGuestUsersHash[$key].userprincipalname.Substring(0, 20)
-        $userprincipalname = $TenantGuestUsersHash[$key].userprincipalname.Split('_')[0] + "_EXT@" + $ADDomain
+        $samaccountname = $TenantGuestUsersHash[$key].userprincipalname.Substring(0, 20).Split('_')[0]
         $displayname = $TenantGuestUsersHash[$key].userprincipalname.Split('#')[0]
         # generate random password
         $bytes = New-Object Byte[] 32
@@ -144,10 +166,11 @@ If ($CreateMissingShadowAccounts -eq $true)
         $rand.Dispose()
         $RandPassword = [System.Convert]::ToBase64String($bytes)
             
+        
         New-ADUser -Name $displayname `
             -SamAccountName $samaccountname `
             -Path $ShadowAccountOU `
-            -UserPrincipalName $userprincipalname `
+            -UserPrincipalName $TenantGuestUsersHash[$key].userprincipalname `
             -Description "Shadow account of Azure AD guest account" `
             -DisplayName $TenantGuestUsersHash[$key].Value.DisplayName `
             -EmailAddress $TenantGuestUsersHash[$key].Mail `
@@ -155,6 +178,7 @@ If ($CreateMissingShadowAccounts -eq $true)
             -ChangePasswordAtLogon $false `
             –PasswordNeverExpires $true `
             -SmartcardLogonRequired $true
+        if($?){Write-Host -ForegroundColor Green "AD User with SAM-Accountname $samaccountname in $ShadowAccountOU created"}        
         Enable-ADAccount -Identity $samaccountname
         }
 }
@@ -168,6 +192,7 @@ If ($RestoreDisabledAccounts -eq $true)
         {
             Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $DisabledShadowAccountOU | Set-ADUser -Enabled $true -Description "Shadow account of Azure AD guest account" 
             Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $DisabledShadowAccountOU | Move-ADObject -TargetPath $ShadowAccountOU
+            if($?){Write-Host -ForegroundColor DarkYellow "AD User $shadow reenabled"}    
         }
     }
 
@@ -181,12 +206,16 @@ If ($RestoreDisabledAccounts -eq $true)
             If ($DisableOrphanedShadowAccounts -eq $true)
             {
                 Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $ShadowAccountOU| Set-ADUser -Enabled $false -Description 'Disabled pending removal' 
-                Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $ShadowAccountOU | Move-ADObject -TargetPath $DisabledShadowAccountOU         
+                Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $ShadowAccountOU | Move-ADObject -TargetPath $DisabledShadowAccountOU
+                if($?){Write-Host -ForegroundColor DarkYellow "AD User $shadow disabled and moved to $ShadowAccountOU"}          
             }
             ElseIf ($DeleteOrphanedShadowAccounts = $true)
             {
                 Get-AdUser -Filter {UserPrincipalName -eq $shadow} -SearchBase $ShadowAccountOU | Remove-AdUser
+                if($?){Write-Host -ForegroundColor DarkYellow "AD User $shadow deleted"}  
             }
         }
   }
   #endregion
+
+  Stop-Transcript
