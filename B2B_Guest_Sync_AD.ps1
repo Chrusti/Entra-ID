@@ -62,17 +62,6 @@ $B2bDisabledShadowAccountsHash = @{}
 $ReenabledShadowAccounts = @{}
 #endregion
 
-function Write-Log {
-    param (
-        [string]$LogPath,
-        [string]$Message,
-        [string]$Type
-    )
-    $timestamp = Get-Date -Format "dd-MM-yyyy HH:mm:ss"
-    $logEntry = "$timestamp - $Type - $Message"
-    Add-Content -Path $LogPath -Value $logEntry
-}
-
 #region log - Start transcription and save to logfile
 
 $LogFileSize = (Get-ChildItem $LogPath).Length
@@ -158,7 +147,9 @@ If ($CreateMissingShadowAccounts -eq $true)
     ForEach($key in $($UsersInB2BGroupHash.keys))
         {
         $samaccountname = $TenantGuestUsersHash[$key].userprincipalname.Substring(0, 20).Split('_')[0]
-        $displayname = $TenantGuestUsersHash[$key].userprincipalname.Split('#')[0]
+        $guestdomain = $TenantGuestUsersHash[$key].userprincipalname.Split('#')[0].Split('_')[1]
+        $guestname = $TenantGuestUsersHash[$key].userprincipalname.Split('#')[0].Split('_')[0]
+        $displayname = $guestdomain + "_" + $guestname
         # generate random password
         $bytes = New-Object Byte[] 32
         $rand = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -172,7 +163,7 @@ If ($CreateMissingShadowAccounts -eq $true)
             -Path $ShadowAccountOU `
             -UserPrincipalName $TenantGuestUsersHash[$key].userprincipalname `
             -Description "Shadow account of Azure AD guest account" `
-            -DisplayName $TenantGuestUsersHash[$key].Value.DisplayName `
+            -DisplayName $displayname `
             -EmailAddress $TenantGuestUsersHash[$key].Mail `
             -AccountPassword (ConvertTo-SecureString $RandPassword -AsPlainText -Force) `
             -ChangePasswordAtLogon $false `
